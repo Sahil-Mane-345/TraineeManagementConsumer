@@ -1,5 +1,6 @@
 using RabbitMQ.Client;
 using TraineeAPI.Consumer;
+using TraineeAPI.Consumer.Extensions;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -13,6 +14,8 @@ builder.Services.AddSingleton( sp => new ConnectionFactory()
     Password = rabbitMQSection["Password"]!,
     VirtualHost = rabbitMQSection["VirtualHost"]!,
 });
+
+builder.Services.AddServiceExtensions(builder.Configuration);
 
 builder.Services.AddHostedService<Worker>();
 

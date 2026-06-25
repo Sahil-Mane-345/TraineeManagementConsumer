@@ -1,6 +1,10 @@
 using System.Text;
+using System.Text.Json;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using TraineeAPI.Consumer.Constants;
+using TraineeAPI.Consumer.Models;
+using TraineeAPI.Consumer.Services;
 
 namespace TraineeAPI.Consumer;
 
@@ -10,10 +14,16 @@ public class Worker : BackgroundService
 
     private readonly ConnectionFactory _connection;
 
-    public Worker(ILogger<Worker> logger, ConnectionFactory connection)
+    private readonly IServiceScopeFactory _serviceScopeFactory;
+
+    private readonly IConfiguration _configuration;
+
+    public Worker(ILogger<Worker> logger, ConnectionFactory connection, IServiceScopeFactory serviceScopeFactory, IConfiguration configuration)
     {
         _connection = connection;
         _logger = logger;
+        _serviceScopeFactory = serviceScopeFactory;
+        _configuration = configuration;
     }
 
 
@@ -23,23 +33,66 @@ public class Worker : BackgroundService
         using var channel = await connection.CreateChannelAsync(cancellationToken: cancellationToken);
 
         await channel.QueueDeclareAsync(
-            queue: "submission-processing",
+            queue: RabbitMQConstants.SubmissionProcessingQueue,
             durable: true,
             exclusive: false,
             autoDelete: false,
-            arguments: null,
+            arguments: new Dictionary<string, object?>{
+                ["x-dead-letter-exchange"] = RabbitMQConstants.DeadLetterExchange,
+                ["x-dead-letter-routing-key"] = RabbitMQConstants.DeadLetterRoutingKey
+            },
             cancellationToken: cancellationToken
         );
 
+        await channel.ExchangeDeclareAsync(exchange: RabbitMQConstants.DeadLetterExchange, type: ExchangeType.Direct, durable: true, autoDelete: false, cancellationToken: cancellationToken);
+
+        await channel.QueueDeclareAsync(
+            queue: RabbitMQConstants.DeadLetterQueue,
+            exclusive: false,
+            durable: true,
+            autoDelete: false,
+            cancellationToken: cancellationToken
+        );
+
+        await channel.QueueBindAsync(
+            queue: RabbitMQConstants.DeadLetterQueue,
+            exchange: RabbitMQConstants.DeadLetterExchange,
+            routingKey: RabbitMQConstants.DeadLetterRoutingKey,
+            cancellationToken: cancellationToken
+        );
+
+
         var cosnumer = new AsyncEventingBasicConsumer(channel);
 
-        cosnumer.ReceivedAsync += async(saved, args) =>
+        cosnumer.ReceivedAsync += async( _ , args) =>
         {
-            var body = args.Body.ToArray();
-            var message = Encoding.UTF8.GetString(body);
+            try
+            {
+                var body = args.Body.ToArray();
+                var message = Encoding.UTF8.GetString(body);
 
-            Console.WriteLine("Received message : " + message);
-            await channel.BasicAckAsync(deliveryTag: args.DeliveryTag, multiple: false);
+                SubmissionProcessingRequestDto file = JsonSerializer.Deserialize<SubmissionProcessingRequestDto>(message)!;
+
+                using var scope = _serviceScopeFactory.CreateScope();
+                var service = scope.ServiceProvider.GetRequiredService<IFileProcessingService>();
+
+                Console.WriteLine("Received message : " + message);
+                await service.FileProcessingAsync(file, args.BasicProperties);
+
+
+                await channel.BasicAckAsync(deliveryTag: args.DeliveryTag, multiple: false);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                if (args.Redelivered)
+                {
+                    
+                    await channel.BasicNackAsync(deliveryTag: args.DeliveryTag, multiple: false, requeue: false);
+                }else{
+                    await channel.BasicNackAsync(deliveryTag: args.DeliveryTag, multiple: false, requeue: true);
+                }
+            }
         };
 
         await channel.BasicConsumeAsync(
