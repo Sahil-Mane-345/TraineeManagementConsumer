@@ -16,19 +16,21 @@ public class Worker : BackgroundService
 
     private readonly IServiceScopeFactory _serviceScopeFactory;
 
-    private readonly IConfiguration _configuration;
+    private readonly int MaxAttempts = 5;
+
 
     public Worker(ILogger<Worker> logger, ConnectionFactory connection, IServiceScopeFactory serviceScopeFactory, IConfiguration configuration)
     {
         _connection = connection;
         _logger = logger;
         _serviceScopeFactory = serviceScopeFactory;
-        _configuration = configuration;
     }
 
 
     protected override async Task ExecuteAsync(CancellationToken cancellationToken)
     {
+        try
+        {
         using var connection = await _connection.CreateConnectionAsync(cancellationToken);
         using var channel = await connection.CreateChannelAsync(cancellationToken: cancellationToken);
 
@@ -82,16 +84,21 @@ public class Worker : BackgroundService
 
                 await channel.BasicAckAsync(deliveryTag: args.DeliveryTag, multiple: false);
             }
-            catch (Exception ex)
+            catch (MaxAttemptException ex)
             {
                 Console.WriteLine(ex.Message);
-                if (args.Redelivered)
+                if (ex.Attempts > MaxAttempts)
                 {
-                    
                     await channel.BasicNackAsync(deliveryTag: args.DeliveryTag, multiple: false, requeue: false);
                 }else{
                     await channel.BasicNackAsync(deliveryTag: args.DeliveryTag, multiple: false, requeue: true);
                 }
+            }catch(Exception ex)
+            {
+                _logger.LogError(ex.StackTrace);
+                Console.WriteLine(ex.InnerException);
+                await channel.BasicNackAsync(deliveryTag: args.DeliveryTag, multiple: false, requeue: false);
+                throw;
             }
         };
 
@@ -102,6 +109,13 @@ public class Worker : BackgroundService
             cancellationToken: cancellationToken
         );
         await Task.Delay(Timeout.Infinite, cancellationToken);
+            
+        }
+        catch (System.Exception)
+        {
+            Console.WriteLine("RabbitMq is not working");
+            throw;
+        }
     }
 
 }

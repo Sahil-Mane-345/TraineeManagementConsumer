@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using RabbitMQ.Client;
+using TraineeAPI.Consumer.Constants;
 using TraineeAPI.Consumer.Context;
 using TraineeAPI.Consumer.Entity;
 using TraineeAPI.Consumer.Models;
@@ -12,11 +13,15 @@ public class FileProcessingService : IFileProcessingService
 
     private readonly AppDbContext _context;
     private readonly IConfiguration _configuration;
-    public FileProcessingService(AppDbContext context, IConfiguration configuration)
+
+    private readonly ILogger<FileProcessingService> _logger;
+    public FileProcessingService(AppDbContext context, IConfiguration configuration, ILogger<FileProcessingService> logger)
     {
         _context = context;
         _configuration = configuration;
+        _logger = logger;
     }
+
     public async Task FileProcessingAsync(SubmissionProcessingRequestDto submissionProcessingRequestDto, IReadOnlyBasicProperties basicProperties)
     {
         SubmissionFile? submissionFile = null;
@@ -24,6 +29,7 @@ public class FileProcessingService : IFileProcessingService
 
         try
         {
+            await Task.Delay(5000);
             
             submissionFile = await _context.SubmissionFiles.FirstOrDefaultAsync( f => f.Id == submissionProcessingRequestDto.SubmissionFileId);
 
@@ -32,15 +38,11 @@ public class FileProcessingService : IFileProcessingService
                 throw new Exception("File Metadat Not found");
             }
 
-            processingJob = await _context.ProcessingJobs.FirstOrDefaultAsync( p => p.CorrelationId == basicProperties.CorrelationId);
-
-            if(processingJob == null)
+            processingJob = await _context.ProcessingJobs.FirstOrDefaultAsync(p => p.MessageId == basicProperties.MessageId) ?? throw new Exception("Processing Job data not found");
+            
+            if (processingJob.Status == "Processing" || processingJob.Status == "Completed")
             {
-                throw new Exception("Processing Job data not found");
-            }
-            if(processingJob.Status != "Queued")
-            {
-                throw new Exception("Process Job is not queued");
+                throw new Exception("Process Job is not queued or failed");
             }
             DateTime startTime = DateTime.UtcNow;
 
@@ -53,7 +55,8 @@ public class FileProcessingService : IFileProcessingService
             processingJob.Status = "Processing";
             
             await _context.SaveChangesAsync();
-            await Task.Delay(10000);
+
+            
             await using var stream = File.OpenRead(FilePath);
 
             var hash = await SHA256.HashDataAsync(stream);
@@ -64,22 +67,19 @@ public class FileProcessingService : IFileProcessingService
 
             processingJob.StartedTime = startTime;
             processingJob.CompletedTime = DateTime.UtcNow;
-
+            processingJob.Attempts += 1;
             processingJob.Status = "Completed";
-
+            _logger.LogInformation("File checksumed");
             await _context.SaveChangesAsync();
         }
         catch (Exception ex )
         {
-            if(processingJob!.Attempts < 1)
-            {
+            _logger.LogError(ex.Message);
             processingJob!.ErrorSummary = ex.Message;
             processingJob!.Attempts += 1 ;
-            processingJob!.Status = "Failed";
-            }
             processingJob.Status = "Failed";
             await _context.SaveChangesAsync();  
-            throw;
+            throw new MaxAttemptException(processingJob.Attempts , ex.Message);
         }
 
     }
