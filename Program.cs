@@ -37,7 +37,7 @@ builder.Services.AddHttpClient<ITraineeProfileService, TraineeProfileService>(sp
     opt.AttemptTimeout.Timeout = TimeSpan.FromSeconds(5);
 });
 
-// builder.Services.AddHostedService<TraineeDirectoryBackgroundService>();
+builder.Services.AddHostedService<TraineeDirectoryBackgroundService>();
 
 builder.Services.AddServiceExtensions(builder.Configuration);
 

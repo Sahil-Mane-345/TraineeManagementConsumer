@@ -16,9 +16,6 @@ public class TraineeDirectoryBackgroundService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-
-        while (!stoppingToken.IsCancellationRequested)
-        {
             try
             {
                 
@@ -37,7 +34,6 @@ public class TraineeDirectoryBackgroundService : BackgroundService
             {
                 Console.WriteLine($"Exception : {ex.Message}");
             }
-        }
         
     }
 }

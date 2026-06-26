@@ -13,7 +13,27 @@ public class TraineeProfileService : ITraineeProfileService
     }
     public async Task<TraineeProfileModel?> GetTrainee()
     {
-        var trainees = await _httpClient.GetAsync("/trainee");
-        return await trainees.Content.ReadFromJsonAsync<TraineeProfileModel>();
+        try
+        {
+            var res = await _httpClient.GetAsync("/trainee");
+
+            if(res.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                Console.WriteLine("Trainee Not Found");
+                return null;
+            }
+            res.EnsureSuccessStatusCode();
+            return await res.Content.ReadFromJsonAsync<TraineeProfileModel>();
+        }
+        catch (HttpRequestException ex)
+        {
+            Console.WriteLine(ex.Message);
+            return default;
+        }
+        catch (System.Exception)
+        {
+            
+            throw;
+        }
     }
 }
